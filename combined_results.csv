@@ -1,4 +1,4 @@
-model_path,folder,val_loss,val_acc,time_per_image,throughput, nums_trainable_parameters
+model_path,folder,val_loss,val_acc,time_per_image,throughput,nums_trainable_parameters
 model_weights/final_checkpoint_resnet18_batch_norm.pt,masked,1.3700177801056663,0.6358019801980198,7.025476965573755e-05,14233.909027105212,51813
 model_weights/final_checkpoint_resnet18_batch_norm.pt,clean,1.19195833166519,0.6787326732673268,5.0804317587673076e-05,19683.36644369445,51813
 model_weights/final_checkpoint_resnet18_batch_norm.pt,downsampled,3.5993444709777833,0.22946534653465347,4.9362919118144725e-05,20258.121234820206,51813

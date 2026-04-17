@@ -3,3 +3,4 @@ test_splits/
 *.pt
 .vscode/
 .venv/
+__pycache__/

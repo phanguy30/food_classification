@@ -5,13 +5,15 @@ helpers.py — shared utilities for all fine-tuning experiments
 import os
 import copy
 import time
-
+import loralib as lora
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from torchvision.datasets import Food101
+import torchvision.models as models
+from torchvision.models import ResNet18_Weights, EfficientNet_V2_S_Weights
 
 
 # ──────────────────────────────────────────────
@@ -295,3 +297,265 @@ def replace_module_by_name(model, module_name: str, new_module: nn.Module):
 def to_int(x):
     """Unwrap single-element tuples returned by Conv2d attribute inspection."""
     return x[0] if isinstance(x, tuple) else x
+
+
+# ──────────────────────────────────────────────
+# MODELS
+# ──────────────────────────────────────────────
+
+def build_resnet18_lora(num_classes: int = 101, r: int = 8, alpha: int = 16):
+    model = models.resnet18(weights=ResNet18_Weights.DEFAULT)
+    model.fc = nn.Linear(model.fc.in_features, num_classes)
+
+    target_layers = [
+        "layer1.0.conv1", "layer1.0.conv2", "layer1.1.conv1", "layer1.1.conv2",
+        "layer2.0.conv1", "layer2.0.conv2", "layer2.1.conv1", "layer2.1.conv2",
+        "layer3.0.conv1", "layer3.0.conv2", "layer3.1.conv1", "layer3.1.conv2",
+        "layer4.0.conv1", "layer4.0.conv2", "layer4.1.conv1", "layer4.1.conv2",
+    ]
+
+    for name, module in list(model.named_modules()):
+        if name in target_layers and isinstance(module, nn.Conv2d):
+            new_layer = lora.Conv2d(
+                in_channels=module.in_channels,
+                out_channels=module.out_channels,
+                kernel_size=to_int(module.kernel_size),
+                stride=to_int(module.stride),
+                padding=to_int(module.padding),
+                dilation=to_int(module.dilation),
+                groups=module.groups,
+                bias=(module.bias is not None),
+                r=r, lora_alpha=alpha,
+            )
+            new_layer.conv.weight.data.copy_(module.weight.data)
+            if module.bias is not None:
+                new_layer.conv.bias.data.copy_(module.bias.data)
+            replace_module_by_name(model, name, new_layer)
+
+    lora.mark_only_lora_as_trainable(model)
+    for p in model.fc.parameters():
+        p.requires_grad = True
+
+    return model
+
+
+def build_efficientnet_v2_s_lora(num_classes=101, r=8, alpha=16):
+    model = models.efficientnet_v2_s(weights=EfficientNet_V2_S_Weights.DEFAULT)
+
+    in_features = model.classifier[1].in_features
+    model.classifier[1] = nn.Linear(in_features, num_classes)
+
+    for name, module in list(model.named_modules()):
+        if isinstance(module, nn.Conv2d) and name.startswith("features"):
+            if module.groups != 1:
+                continue
+
+            new_layer = lora.Conv2d(
+                in_channels=module.in_channels,
+                out_channels=module.out_channels,
+                kernel_size=to_int(module.kernel_size),
+                stride=to_int(module.stride),
+                padding=to_int(module.padding),
+                dilation=to_int(module.dilation),
+                groups=module.groups,
+                bias=(module.bias is not None),
+                r=r,
+                lora_alpha=alpha
+            )
+
+            new_layer.conv.weight.data.copy_(module.weight.data)
+            if module.bias is not None:
+                new_layer.conv.bias.data.copy_(module.bias.data)
+
+            replace_module_by_name(model, name, new_layer)
+
+    lora.mark_only_lora_as_trainable(model)
+
+    for p in model.classifier[1].parameters():
+        p.requires_grad = True
+
+    return model
+
+
+    
+
+class ResNetWithAdapters(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+        self.adapters = nn.ModuleDict({
+            "layer1": CNNAdapter(64),
+            "layer2": CNNAdapter(128),
+            "layer3": CNNAdapter(256),
+            "layer4": CNNAdapter(512),
+        })
+
+    def forward(self, x):
+        x = self.model.conv1(x)
+        x = self.model.bn1(x)
+        x = self.model.relu(x)
+        x = self.model.maxpool(x)
+
+        x = self.model.layer1(x)
+        x = self.adapters["layer1"](x)
+
+        x = self.model.layer2(x)
+        x = self.adapters["layer2"](x)
+
+        x = self.model.layer3(x)
+        x = self.adapters["layer3"](x)
+
+        x = self.model.layer4(x)
+        x = self.adapters["layer4"](x)
+
+        x = self.model.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.model.fc(x)
+
+        return x
+    
+
+
+class CNNAdapter(nn.Module):
+    def __init__(self, channels, reduction_factor=8):
+        super().__init__()
+        bottleneck = channels // reduction_factor
+        self.adapter = nn.Sequential(
+            nn.Conv2d(channels, bottleneck, kernel_size=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(bottleneck, channels, kernel_size=1)
+        )
+
+    def forward(self, x):
+        return x + self.adapter(x) 
+    
+
+
+class EfficientNetWithAdapters(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+        # pick certain stages to add adapters to. 
+        self.adapter_indices = [3, 5, 6]  
+
+        self.adapters = nn.ModuleDict({
+            str(i): CNNAdapter(self._get_channels(i))
+            for i in self.adapter_indices
+        })
+
+    def _get_channels(self, idx):
+        # get output channels of that stage
+        return self.model.features[idx][-1].out_channels
+
+    def forward(self, x):
+        for i, layer in enumerate(self.model.features):
+            x = layer(x)
+            if str(i) in self.adapters:
+                x = self.adapters[str(i)](x)
+
+        x = self.model.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.model.classifier(x)
+        return x
+
+base_model = models.efficientnet_v2_s(
+    weights=models.EfficientNet_V2_S_Weights.DEFAULT
+)
+
+
+class SpatialAttention(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv = nn.Conv2d(2, 1, kernel_size=7, padding=3)
+
+    def forward(self, x):
+        # x: (B, C, H, W)
+
+        avg = torch.mean(x, dim=1, keepdim=True)      # (B, 1, H, W)
+        max, _ = torch.max(x, dim=1, keepdim=True)    # (B, 1, H, W)
+
+        x_cat = torch.cat([avg, max], dim=1)          # (B, 2, H, W)
+        mask = torch.sigmoid(self.conv(x_cat))        # (B, 1, H, W)
+
+        return x * mask
+
+class ChannelAttention(nn.Module):
+    def __init__(self, channels, reduction=16):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(channels, channels // reduction),
+            nn.ReLU(),
+            nn.Linear(channels // reduction, channels)
+        )
+
+    def forward(self, x):
+        b, c, h, w = x.shape
+
+        avg = torch.mean(x, dim=(2, 3))               # (B, C)
+        max, _ = torch.max(x.view(b, c, -1), dim=2)   # (B, C)
+
+        attn = self.mlp(avg) + self.mlp(max)
+        attn = torch.sigmoid(attn).view(b, c, 1, 1)
+
+        return x * attn
+
+class CBAMAdapter(nn.Module):
+    def __init__(self, channels, reduction_factor=8):
+        super().__init__()
+        
+        bottleneck = channels // reduction_factor
+        self.conv_adapter = nn.Sequential(
+            nn.Conv2d(channels, bottleneck, kernel_size=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(bottleneck, channels, kernel_size=1)
+        )
+        # make sure conv adapter starts as identity function
+        nn.init.zeros_(self.conv_adapter[-1].weight)
+        
+        self.spatial_attn = SpatialAttention()
+        self.channel_attn = ChannelAttention(channels)
+
+    def forward(self, x):
+        x = x + self.conv_adapter(x)
+        x = x + self.channel_attn(x)
+        x = x + self.spatial_attn(x)
+        
+        return x
+
+class ResNetWithCBAMAdapters(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+        self.adapters = nn.ModuleDict({
+            "layer1": CBAMAdapter(64),
+            "layer2": CBAMAdapter(128),
+            "layer3": CBAMAdapter(256),
+            "layer4": CBAMAdapter(512),
+        })
+
+    def forward(self, x):
+        x = self.model.conv1(x)
+        x = self.model.bn1(x)
+        x = self.model.relu(x)
+        x = self.model.maxpool(x)
+
+        x = self.model.layer1(x)
+        x = self.adapters["layer1"](x)
+
+        x = self.model.layer2(x)
+        x = self.adapters["layer2"](x)
+
+        x = self.model.layer3(x)
+        x = self.adapters["layer3"](x)
+
+        x = self.model.layer4(x)
+        x = self.adapters["layer4"](x)
+
+        x = self.model.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.model.fc(x)
+
+        return x

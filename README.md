@@ -1,69 +1,55 @@
-# Food-101 Classification: Parameter-Efficient Fine-Tuning & Robustness Analysis
+# Parameter-Efficient Fine-Tuning and Robustness on Food-101
 
-This project explores various **Parameter-Efficient Fine-Tuning (PEFT)** techniques for food classification using the **Food-101** dataset. We compare several adaptation methods across two architectures—**ResNet18** and **EfficientNetV2-S**—and evaluate their performance not only on clean data but also their **robustness** to common image corruptions.
+A benchmark of five fine-tuning methods for image classification on Food-101, measuring both clean accuracy and robustness to common image corruptions, with Grad-CAM to check what the models actually look at.
 
-## 🚀 Project Highlights
+## Highlights
 
-- **Comprehensive PEFT Comparison**: Evaluated LoRA, Task-Specific Adapters, BatchNorm Tuning, and Linear Probing.
-- **Custom Architecture**: Developed a **Custom CBAM Adapter** (Convolutional Block Attention Module) that integrates spatial and channel attention for improved feature extraction.
-- **Robustness Benchmarking**: Tested models against 6 different scenarios: Clean, Masked, Noise/Rotation, Blur (Little/Medium), and Downsampling.
-- **Interpretability**: Leveraged **Grad-CAM** visualizations to understand where models focus during classification.
-- **Efficiency Metrics**: Detailed analysis of accuracy vs. trainable parameters and inference throughput.
+- **EfficientNetV2-S:** BatchNorm tuning reached 71.0% mean robustness accuracy while training only **283K parameters**.
+- **ResNet18:** A custom CBAM adapter (spatial and channel attention) gave the largest robustness gains.
+- Grad-CAM confirmed that gains came from relevant image regions, not spurious features.
 
-## 🛠️ Implemented Methods
+## Methods
 
-| Method | Description |
-| :--- | :--- |
-| **Linear Probing** | Fine-tuning only the final classification head (Baseline). |
-| **BatchNorm Tuning** | Tuning only the affine parameters (scale/shift) of BatchNorm layers. |
-| **LoRA** | Low-Rank Adaptation of convolutional layers (using `loralib`). |
-| **Task Adapters** | Custom 1x1 bottleneck convolution layers inserted into the backbone. |
-| **Custom CBAM** | A specialized adapter combining Spatial and Channel attention mechanisms. |
+| Method | What is trained |
+|--------|-----------------|
+| Linear probing | Final classification head only (baseline) |
+| BatchNorm tuning | Scale and shift parameters of BatchNorm layers |
+| LoRA | Low-rank adapters on convolutional layers (`loralib`) |
+| Task adapters | Custom 1x1 bottleneck convolution layers in the backbone |
+| Custom CBAM | Custom adapter combining spatial and channel attention |
 
-## 📊 Key Results
+**Backbones:** ResNet18 and EfficientNetV2-S.
+**Robustness tests:** Clean, Masked, Noise/Rotation, Blur (Little), Blur (Medium), Downsampling.
 
-Our analysis reveals that **BatchNorm Tuning** and **LoRA** offer the best trade-off between accuracy and parameter efficiency.
+## Results
 
-| Backbone | Best Method | Mean Accuracy | Clean Accuracy | Trainable Params |
-| :--- | :--- | :--- | :--- | :--- |
-| **EfficientNetV2-S** | BatchNorm Tuning | **71.0%** | **86.5%** | 283k |
-| **EfficientNetV2-S** | LoRA | 66.8% | 84.9% | 1.51M |
-| **ResNet18** | Custom CBAM | **57.1%** | **69.6%** | 194k |
-| **ResNet18** | BatchNorm Tuning | 52.1% | 67.9% | 51k |
+Mean accuracy is averaged across all robustness test sets.
 
-> **Note**: Mean accuracy is averaged across all robustness test sets. The **Custom CBAM** model showed the highest robustness gains for the ResNet18 backbone.
+| Backbone | Best method | Mean acc. | Clean acc. | Trainable params |
+|----------|-------------|-----------|------------|------------------|
+| EfficientNetV2-S | BatchNorm tuning | 71.0% | 86.5% | 283K |
+| EfficientNetV2-S | LoRA | 66.8% | 84.9% | 1.51M |
+| ResNet18 | Custom CBAM | 57.1% | 69.6% | 194K |
+| ResNet18 | BatchNorm tuning | 52.1% | 67.9% | 51K |
 
-## 📂 Project Structure
+BatchNorm tuning and LoRA gave the best balance of accuracy and parameter efficiency. Full results for every method are in `combined_results.csv`, and the write-up is in `Project_Report.pdf`.
 
-```text
-├── efficientnetv2_training/ # Training notebooks for EfficientNetV2-S
-├── resnet18_training/      # Training notebooks for ResNet18
-├── model_weights/           # Saved checkpoints (.pt)
-├── analysis.ipynb           # Comparative analysis and plotting
-├── grad_cam_visualization.ipynb # Interpretability analysis
-├── helpers.py               # Shared utilities for models and data loading
-├── combined_results.csv     # Raw data for all experiments
-└── README.md                # Project documentation
+## Repository structure
+
+```
+efficientnetv2_training/      training notebooks for EfficientNetV2-S (one per method)
+resnet18_training/            training notebooks for ResNet18 (one per method)
+analysis.ipynb                comparison analysis and plots
+grad_cam_visualization.ipynb  interpretability analysis
+helpers.py                    shared model and data-loading utilities
+combined_results.csv          raw results for all experiments
+Project_Report.pdf            full write-up
+model_weights/                saved checkpoints (not tracked in git)
 ```
 
-## ⚙️ Setup & Usage
+## Run it
 
-### Installation
-
-1. Clone the repository.
-2. Install dependencies:
-   ```bash
-   pip install torch torchvision matplotlib pandas seaborn loralib
-   ```
-
-### Training
-Each method has a dedicated notebook in the `resnet18_training` or `efficientnetv2_training` folders. Simply open and run the cells to reproduce the results.
-
-### Evaluation & Analysis
-Run `analysis.ipynb` to generate comparison charts and summary tables from `combined_results.csv`.
-
-## 🖼️ Visualizations (Grad-CAM)
-The `grad_cam_visualization.ipynb` notebook provides visual proof of the models' learning, highlighting relevant food features (e.g., textures of pizza toppings, structure of burgers) that drive the classification decisions.
-
----
-*Developed as part of the MDS project at UBC.*
+1. Clone the repository and install `torch`, `torchvision`, `matplotlib`, `pandas`, `seaborn` and `loralib`.
+2. Run the notebook for each method in `resnet18_training/` or `efficientnetv2_training/`.
+3. Run `analysis.ipynb` to generate charts and tables from `combined_results.csv`.
+4. Run `grad_cam_visualization.ipynb` for the Grad-CAM figures.
